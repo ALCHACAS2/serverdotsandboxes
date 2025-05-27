@@ -20,16 +20,15 @@ const io = new Server(server, {
 const rooms = {};
 const gameStates = {}; // Para mantener el estado de cada juego
 
-const GRID_SIZE = 10; // Mismo tamaño que en el cliente
-
 // Función para inicializar el estado del juego
-function initializeGameState(roomCode, players) {
+function initializeGameState(roomCode, players, gridSize) {
     gameStates[roomCode] = {
-        horizontalLines: Array(GRID_SIZE + 1).fill(null).map(() => Array(GRID_SIZE).fill(false)),
-        verticalLines: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE + 1).fill(false)),
-        boxes: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(null)),
+        horizontalLines: Array(gridSize + 1).fill(null).map(() => Array(gridSize).fill(false)),
+        verticalLines: Array(gridSize).fill(null).map(() => Array(gridSize + 1).fill(false)),
+        boxes: Array(gridSize).fill(null).map(() => Array(gridSize).fill(null)),
         turnIndex: 0,
-        scores: {}
+        scores: {},
+        gridSize: gridSize
     };
 
     // Inicializar scores
@@ -41,44 +40,60 @@ function initializeGameState(roomCode, players) {
 io.on("connection", (socket) => {
     console.log("Cliente conectado:", socket.id);
 
-    socket.on("joinRoom", ({ roomCode, name }) => {
+    socket.on("joinRoom", ({ roomCode, name, gridSize = 3 }) => {
         const roomCodeNormalized = roomCode.trim().toLowerCase();
 
-        console.log(`${name} intentando unirse a la sala ${roomCodeNormalized}`);
+        console.log(`${name} intentando unirse a la sala ${roomCodeNormalized} con tamaño ${gridSize}x${gridSize}`);
 
         if (!rooms[roomCodeNormalized]) {
-            rooms[roomCodeNormalized] = [];
+            rooms[roomCodeNormalized] = {
+                players: [],
+                gridSize: gridSize,
+                maxPlayers: 2
+            };
         }
 
-        if (rooms[roomCodeNormalized].length >= 2) {
+        if (rooms[roomCodeNormalized].players.length >= rooms[roomCodeNormalized].maxPlayers) {
             socket.emit("roomFull");
             return;
         }
 
         // Verificar si el jugador ya está en la sala
-        const existingPlayer = rooms[roomCodeNormalized].find(p => p.name === name);
+        const existingPlayer = rooms[roomCodeNormalized].players.find(p => p.name === name);
         if (existingPlayer) {
             console.log(`${name} ya está en la sala ${roomCodeNormalized}`);
             socket.emit("roomFull");
             return;
         }
 
-        rooms[roomCodeNormalized].push({ id: socket.id, name });
+        // Si es el primer jugador, establecer el tamaño de la cuadrícula
+        if (rooms[roomCodeNormalized].players.length === 0) {
+            rooms[roomCodeNormalized].gridSize = gridSize;
+            console.log(`Tamaño de cuadrícula establecido para sala ${roomCodeNormalized}: ${gridSize}x${gridSize}`);
+        }
+
+        rooms[roomCodeNormalized].players.push({ id: socket.id, name });
         socket.join(roomCodeNormalized);
 
-        console.log(`${name} se unió a la sala ${roomCodeNormalized}. Jugadores: ${rooms[roomCodeNormalized].length}/2`);
+        console.log(`${name} se unió a la sala ${roomCodeNormalized}. Jugadores: ${rooms[roomCodeNormalized].players.length}/${rooms[roomCodeNormalized].maxPlayers}`);
 
-        // Enviar actualización de jugadores
-        io.to(roomCodeNormalized).emit("playersUpdate", rooms[roomCodeNormalized]);
+        // Enviar actualización de jugadores con información de la sala
+        io.to(roomCodeNormalized).emit("playersUpdate", {
+            players: rooms[roomCodeNormalized].players,
+            gridSize: rooms[roomCodeNormalized].gridSize
+        });
 
-        if (rooms[roomCodeNormalized].length === 2) {
-            console.log(`Iniciando juego en la sala ${roomCodeNormalized}`);
+        if (rooms[roomCodeNormalized].players.length === rooms[roomCodeNormalized].maxPlayers) {
+            console.log(`Iniciando juego en la sala ${roomCodeNormalized} con cuadrícula ${rooms[roomCodeNormalized].gridSize}x${rooms[roomCodeNormalized].gridSize}`);
 
-            // Inicializar estado del juego
-            initializeGameState(roomCodeNormalized, rooms[roomCodeNormalized]);
+            // Inicializar estado del juego con el tamaño correcto
+            initializeGameState(roomCodeNormalized, rooms[roomCodeNormalized].players, rooms[roomCodeNormalized].gridSize);
 
-            // Enviar evento de inicio de juego con los jugadores
-            io.to(roomCodeNormalized).emit("startGame", rooms[roomCodeNormalized]);
+            // Enviar evento de inicio de juego con los jugadores y configuración
+            io.to(roomCodeNormalized).emit("startGame", {
+                players: rooms[roomCodeNormalized].players,
+                gridSize: rooms[roomCodeNormalized].gridSize
+            });
 
             // Enviar estado inicial del juego
             io.to(roomCodeNormalized).emit("game_state", gameStates[roomCodeNormalized]);
@@ -120,19 +135,22 @@ io.on("connection", (socket) => {
         console.log("Cliente desconectado:", socket.id);
 
         for (const code in rooms) {
-            const playerIndex = rooms[code].findIndex(p => p.id === socket.id);
+            const playerIndex = rooms[code].players.findIndex(p => p.id === socket.id);
             if (playerIndex !== -1) {
-                const playerName = rooms[code][playerIndex].name;
+                const playerName = rooms[code].players[playerIndex].name;
                 console.log(`${playerName} salió de la sala ${code}`);
 
-                rooms[code] = rooms[code].filter(p => p.id !== socket.id);
+                rooms[code].players = rooms[code].players.filter(p => p.id !== socket.id);
 
-                if (rooms[code].length === 0) {
+                if (rooms[code].players.length === 0) {
                     delete rooms[code];
                     delete gameStates[code];
                     console.log(`Sala ${code} eliminada`);
                 } else {
-                    io.to(code).emit("playersUpdate", rooms[code]);
+                    io.to(code).emit("playersUpdate", {
+                        players: rooms[code].players,
+                        gridSize: rooms[code].gridSize
+                    });
                     io.to(code).emit("playerDisconnected", { playerName });
                 }
             }
