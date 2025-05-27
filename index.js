@@ -22,21 +22,21 @@ const rooms = {};
 io.on("connection", (socket) => {
   console.log("Cliente conectado:", socket.id);
 
-  socket.on("join_room", ({ roomCode, playerName }) => {
+  socket.on("joinRoom", ({ roomCode, name }) => {
     if (!rooms[roomCode]) rooms[roomCode] = [];
 
     if (rooms[roomCode].length >= 2) {
-      socket.emit("room_full");
+      socket.emit("roomFull");
       return;
     }
 
-    rooms[roomCode].push({ id: socket.id, name: playerName });
+    rooms[roomCode].push({ id: socket.id, name });
     socket.join(roomCode);
 
-    io.to(roomCode).emit("update_players", rooms[roomCode]);
+    io.to(roomCode).emit("playersUpdate", rooms[roomCode]);
 
     if (rooms[roomCode].length === 2) {
-      io.to(roomCode).emit("start_game", rooms[roomCode]);
+      io.to(roomCode).emit("startGame", rooms[roomCode]);
     }
   });
 
@@ -50,14 +50,14 @@ io.on("connection", (socket) => {
       if (rooms[code].length === 0) {
         delete rooms[code];
       } else {
-        io.to(code).emit("update_players", rooms[code]);
+        io.to(code).emit("playersUpdate", rooms[code]);
       }
     }
   });
 });
 
 app.get("/", (req, res) => {
-  res.send("Dots and Boxes Socket Server");
+  res.send("Dots and Boxes Socket Server.");
 });
 
 server.listen(PORT, () => {
