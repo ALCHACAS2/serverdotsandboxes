@@ -20,7 +20,7 @@ const io = new Server(server, {
 const rooms = {};
 const gameStates = {}; // Para mantener el estado de cada juego
 
-const GRID_SIZE = 3; // Mismo tamaño que en el cliente
+const GRID_SIZE = 10; // Mismo tamaño que en el cliente
 
 // Función para inicializar el estado del juego
 function initializeGameState(roomCode, players) {
