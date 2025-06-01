@@ -1,3 +1,31 @@
+require("dotenv").config(); // Al inicio del archivo
+const nodemailer = require("nodemailer");
+
+const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
+function sendNotification(subject, message) {
+    const mailOptions = {
+        from: 'enviocorreoa@gmail.com',
+        to: "enviocorreoa@gmail.com", // Podés cambiar esto si querés enviar a otro correo
+        subject: subject,
+        text: message
+    };
+
+    transporter.sendMail(mailOptions, function (error, info) {
+        if (error) {
+            console.error("❌ Error al enviar el correo:", error);
+        } else {
+            console.log("✅ Correo enviado:", info.response);
+        }
+    });
+}
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -28,7 +56,8 @@ function initializeGameState(roomCode, players, gridSize) {
         boxes: Array(gridSize).fill(null).map(() => Array(gridSize).fill(null)),
         turnIndex: 0,
         scores: {},
-        gridSize: gridSize
+        gridSize: gridSize,
+        gameEnded: false
     };
 
     // Inicializar scores
@@ -37,13 +66,62 @@ function initializeGameState(roomCode, players, gridSize) {
     });
 }
 
+// Función para verificar si el juego ha terminado y determinar el ganador
+function checkGameEnd(roomCode) {
+    const gameState = gameStates[roomCode];
+    const room = rooms[roomCode];
+
+    if (!gameState || !room || gameState.gameEnded) return null;
+
+    const totalBoxes = gameState.gridSize * gameState.gridSize;
+    const completedBoxes = gameState.boxes.flat().filter(box => box !== null).length;
+
+    if (completedBoxes === totalBoxes) {
+        gameState.gameEnded = true;
+
+        // Encontrar el ganador
+        const players = room.players;
+        const scores = gameState.scores;
+
+        let winner = null;
+        let maxScore = -1;
+        let isTie = false;
+
+        players.forEach(player => {
+            const score = scores[player.name] || 0;
+            if (score > maxScore) {
+                maxScore = score;
+                winner = player.name;
+                isTie = false;
+            } else if (score === maxScore) {
+                isTie = true;
+            }
+        });
+
+        if (isTie) {
+            sendNotification(
+                "🤝 Empate en Dots and Boxes",
+                `La partida en la sala '${roomCode}' terminó en empate. Ambos jugadores obtuvieron ${maxScore} puntos.`
+            );
+            return { result: 'tie', scores };
+        } else {
+            const loser = players.find(p => p.name !== winner)?.name;
+            sendNotification(
+                "🏆 Victoria en Dots and Boxes",
+                `¡${winner} ha ganado la partida en la sala '${roomCode}'! Puntuación final: ${winner}: ${maxScore}, ${loser}: ${scores[loser] || 0}`
+            );
+            return { result: 'win', winner, scores };
+        }
+    }
+
+    return null;
+}
+
 io.on("connection", (socket) => {
     console.log("Cliente conectado:", socket.id);
 
     socket.on("joinRoom", ({ roomCode, name, gridSize = 3 }) => {
         const roomCodeNormalized = roomCode.trim().toLowerCase();
-
-        console.log(`${name} intentando unirse a la sala ${roomCodeNormalized} con tamaño ${gridSize}x${gridSize}`);
 
         if (!rooms[roomCodeNormalized]) {
             rooms[roomCodeNormalized] = {
@@ -51,9 +129,27 @@ io.on("connection", (socket) => {
                 gridSize: gridSize,
                 maxPlayers: 2
             };
+
+            sendNotification(
+                "🎮 Nueva sala creada",
+                `El jugador ${name} ha creado la sala '${roomCodeNormalized}' con un grid de ${gridSize}x${gridSize}.`
+            );
+        } else {
+            sendNotification(
+                "👤 Jugador se unió a sala existente",
+                `El jugador ${name} se unió a la sala '${roomCodeNormalized}'.`
+            );
         }
 
+        console.log(`${name} intentando unirse a la sala ${roomCodeNormalized} con tamaño ${gridSize}x${gridSize}`);
+
         if (rooms[roomCodeNormalized].players.length >= rooms[roomCodeNormalized].maxPlayers) {
+            // Notificación cuando la sala está llena
+            sendNotification(
+                "🚫 Sala llena",
+                `El jugador ${name} intentó unirse a la sala '${roomCodeNormalized}' pero está llena (${rooms[roomCodeNormalized].players.length}/${rooms[roomCodeNormalized].maxPlayers} jugadores).`
+            );
+
             socket.emit("roomFull");
             return;
         }
@@ -62,6 +158,12 @@ io.on("connection", (socket) => {
         const existingPlayer = rooms[roomCodeNormalized].players.find(p => p.name === name);
         if (existingPlayer) {
             console.log(`${name} ya está en la sala ${roomCodeNormalized}`);
+
+            sendNotification(
+                "⚠️ Jugador duplicado",
+                `El jugador ${name} intentó unirse nuevamente a la sala '${roomCodeNormalized}' donde ya está presente.`
+            );
+
             socket.emit("roomFull");
             return;
         }
@@ -85,6 +187,13 @@ io.on("connection", (socket) => {
 
         if (rooms[roomCodeNormalized].players.length === rooms[roomCodeNormalized].maxPlayers) {
             console.log(`Iniciando juego en la sala ${roomCodeNormalized} con cuadrícula ${rooms[roomCodeNormalized].gridSize}x${rooms[roomCodeNormalized].gridSize}`);
+
+            // Notificación cuando la sala está completa y el juego comienza
+            const playerNames = rooms[roomCodeNormalized].players.map(p => p.name).join(" vs ");
+            sendNotification(
+                "🎯 Sala completa - Juego iniciado",
+                `La sala '${roomCodeNormalized}' está completa con ${rooms[roomCodeNormalized].maxPlayers} jugadores (${playerNames}). ¡El juego ha comenzado!`
+            );
 
             // Inicializar estado del juego con el tamaño correcto
             initializeGameState(roomCodeNormalized, rooms[roomCodeNormalized].players, rooms[roomCodeNormalized].gridSize);
@@ -115,6 +224,13 @@ io.on("connection", (socket) => {
             gameStates[roomCodeNormalized].boxes = boxes;
 
             console.log(`Estado del juego actualizado para sala ${roomCodeNormalized}`);
+
+            // Verificar si el juego ha terminado
+            const gameResult = checkGameEnd(roomCodeNormalized);
+            if (gameResult) {
+                // Enviar resultado del juego a todos los jugadores
+                io.to(roomCodeNormalized).emit("gameEnded", gameResult);
+            }
         }
 
         // Enviar el movimiento y el nuevo estado a todos los otros jugadores en la sala
@@ -143,10 +259,22 @@ io.on("connection", (socket) => {
                 rooms[code].players = rooms[code].players.filter(p => p.id !== socket.id);
 
                 if (rooms[code].players.length === 0) {
+                    // Notificación cuando una sala es eliminada
+                    sendNotification(
+                        "🗑️ Sala eliminada",
+                        `La sala '${code}' ha sido eliminada porque todos los jugadores se desconectaron. El último jugador en salir fue ${playerName}.`
+                    );
+
                     delete rooms[code];
                     delete gameStates[code];
                     console.log(`Sala ${code} eliminada`);
                 } else {
+                    // Notificación cuando un jugador se desconecta pero la sala sigue activa
+                    sendNotification(
+                        "👋 Jugador desconectado",
+                        `El jugador ${playerName} se desconectó de la sala '${code}'. Quedan ${rooms[code].players.length} jugador(es) en la sala.`
+                    );
+
                     io.to(code).emit("playersUpdate", {
                         players: rooms[code].players,
                         gridSize: rooms[code].gridSize
