@@ -178,7 +178,10 @@ io.on("connection", (socket) => {
         socket.join(roomCodeNormalized);
 
         console.log(`${name} se unió a la sala ${roomCodeNormalized}. Jugadores: ${rooms[roomCodeNormalized].players.length}/${rooms[roomCodeNormalized].maxPlayers}`);
-
+        socket.on("signal", ({ roomCode, data }) => {
+            // Muy importante: reenviar solo al otro jugador
+            socket.to(roomCode).emit("signal", { data });
+        });
         // Enviar actualización de jugadores con información de la sala
         io.to(roomCodeNormalized).emit("playersUpdate", {
             players: rooms[roomCodeNormalized].players,
