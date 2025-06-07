@@ -311,3 +311,8 @@ app.get("/rooms", (req, res) => {
 server.listen(PORT, () => {
     console.log(`Servidor escuchando en puerto ${PORT}`);
 });
+// Notificación inicial de inicio del servidor
+sendNotification(
+    "🚀 Servidor Dots and Boxes iniciado",
+    `El servidor de Dots and Boxes está corriendo en el puerto ${PORT}.`
+);
